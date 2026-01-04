@@ -8,32 +8,59 @@ use chrono::prelude::*;
 #[serde(crate = "rocket::serde")]
 struct Config {
     ical_url: String,
-    travelynx_token: String,
+    traewelling_username: String,
+}
+
+// #[derive(Debug, Deserialize)]
+// #[serde(crate = "rocket::serde")]
+// struct TravelynxRaw {
+//     #[serde(rename = "checkedIn")]
+//     checked_in: bool,
+//     #[serde(rename = "fromStation")]
+//     from_station: TravelynxStation,
+//     #[serde(rename = "toStation")]
+//     to_station: TravelynxStation,
+// }
+//
+// #[derive(Debug, Deserialize)]
+// #[serde(crate = "rocket::serde")]
+// struct TravelynxStation {
+//     #[serde(rename = "realTime")]
+//     real_time: i64,
+//     #[serde(rename = "scheduledTime")]
+//     scheduled_time: i64,
+// }
+
+#[derive(Debug, Deserialize)]
+#[serde(crate = "rocket::serde")]
+struct TraewellingRaw {
+    data: Vec<TraewellingTrip>,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(crate = "rocket::serde")]
-struct TravelynxRaw {
-    #[serde(rename = "checkedIn")]
-    checked_in: bool,
-    #[serde(rename = "fromStation")]
-    from_station: TravelynxStation,
-    #[serde(rename = "toStation")]
-    to_station: TravelynxStation,
+struct TraewellingTrip {
+    id: u64,
+    train: TraewellingTrain,
 }
 
 #[derive(Debug, Deserialize)]
 #[serde(crate = "rocket::serde")]
-struct TravelynxStation {
-    #[serde(rename = "realTime")]
-    real_time: i64,
-    #[serde(rename = "scheduledTime")]
-    scheduled_time: i64,
+struct TraewellingTrain {
+    origin: TraewellingStation,
+    destination: TraewellingStation,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(crate = "rocket::serde")]
+struct TraewellingStation {
+    arrival: DateTime<Utc>,
+    departure: DateTime<Utc>,
 }
 
 #[derive(Debug)]
-struct Travelynx {
-    checked_in: bool,
+struct Traewelling {
+    id: u64,
     start: DateTime<Utc>,
     end: DateTime<Utc>,
 }
@@ -107,32 +134,52 @@ async fn get_flights(client: &reqwest::Client, config: &Config) -> Result<Vec<Fl
     Ok(flights)
 }
 
-async fn get_travelyx(client: &reqwest::Client, config: &Config) -> Result<Travelynx, rocket::http::Status> {
-    let r = client.get(format!("https://travelynx.de/api/v1/status/{}", config.travelynx_token))
+// async fn get_travelyx(client: &reqwest::Client, config: &Config) -> Result<Travelynx, rocket::http::Status> {
+//     let r = client.get(format!("https://travelynx.de/api/v1/status/{}", config.travelynx_token))
+//         .send().await.map_err(|_| rocket::http::Status::InternalServerError)?
+//         .json::<TravelynxRaw>().await.map_err(|_| rocket::http::Status::InternalServerError)?;
+//
+//     let start = std::cmp::min(r.from_station.scheduled_time, r.from_station.real_time);
+//     let end = std::cmp::min(r.to_station.scheduled_time, r.to_station.real_time);
+//
+//     Ok(Travelynx {
+//         checked_in: r.checked_in,
+//         start: Utc.timestamp_opt(start, 0).earliest().ok_or(rocket::http::Status::InternalServerError)?,
+//         end: Utc.timestamp_opt(end, 0).latest().ok_or(rocket::http::Status::InternalServerError)?,
+//     })
+// }
+
+async fn get_traewelling(client: &reqwest::Client, config: &Config) -> Result<Traewelling, rocket::http::Status> {
+    let r = client.get(format!(" https://traewelling.de/api/v1/user/{}/statuses?limit=1", config.traewelling_username))
         .send().await.map_err(|_| rocket::http::Status::InternalServerError)?
-        .json::<TravelynxRaw>().await.map_err(|_| rocket::http::Status::InternalServerError)?;
+        .json::<TraewellingRaw>().await.map_err(|_| rocket::http::Status::InternalServerError)?;
 
-    let start = std::cmp::min(r.from_station.scheduled_time, r.from_station.real_time);
-    let end = std::cmp::min(r.to_station.scheduled_time, r.to_station.real_time);
+    if r.data.is_empty() {
+        return Ok(Traewelling {
+            id: 0,
+            start: DateTime::<Utc>::MAX_UTC,
+            end: DateTime::<Utc>::MIN_UTC,
+        })
+    }
 
-    Ok(Travelynx {
-        checked_in: r.checked_in,
-        start: Utc.timestamp_opt(start, 0).earliest().ok_or(rocket::http::Status::InternalServerError)?,
-        end: Utc.timestamp_opt(end, 0).latest().ok_or(rocket::http::Status::InternalServerError)?,
+    Ok(Traewelling {
+        id: r.data[0].id,
+        start: r.data[0].train.origin.arrival,
+        end: r.data[0].train.destination.departure,
     })
 }
 
 #[derive(Debug)]
 enum Status<'a> {
-    Travelynx,
+    Traewelling(u64),
     Flight(&'a str),
 }
 
-fn nearest_event<'a>(flights: &'a[Flight], travelynx: &Travelynx) -> Status<'a> {
+fn nearest_event<'a>(flights: &'a[Flight], traewelling: &Traewelling) -> Status<'a> {
     let now = Utc::now();
 
-    if (travelynx.start < now && now < travelynx.end) || travelynx.checked_in {
-        return Status::Travelynx;
+    if traewelling.start < now && now < traewelling.end {
+        return Status::Traewelling(traewelling.id);
     }
 
     for flight in flights {
@@ -143,10 +190,10 @@ fn nearest_event<'a>(flights: &'a[Flight], travelynx: &Travelynx) -> Status<'a> 
 
     let first_flight = match flights.first() {
         Some(f) => f,
-        None => return Status::Travelynx,
+        None => return Status::Traewelling(traewelling.id),
     };
 
-    let travelynx_diff = travelynx.start - now;
+    let travelynx_diff = traewelling.start - now;
     let flight_diff = first_flight.start - now;
     let travelynx_diff = if travelynx_diff < chrono::Duration::zero() {
         travelynx_diff * -1
@@ -162,7 +209,7 @@ fn nearest_event<'a>(flights: &'a[Flight], travelynx: &Travelynx) -> Status<'a> 
     if flight_diff < travelynx_diff {
         Status::Flight(&first_flight.flighty_id)
     } else {
-        Status::Travelynx
+        Status::Traewelling(traewelling.id)
     }
 }
 
@@ -171,10 +218,11 @@ async fn index(config: &rocket::State<Config>) -> Result<rocket::response::Redir
     let client = reqwest::Client::new();
 
     let flights = get_flights(&client, &config).await?;
-    let travelynx = get_travelyx(&client, &config).await?;
+    let traewelling = get_traewelling(&client, &config).await?;
 
-    Ok(match nearest_event(&flights, &travelynx) {
-        Status::Travelynx =>  rocket::response::Redirect::temporary("https://travelynx.de/p/q"),
+    Ok(match nearest_event(&flights, &traewelling) {
+        Status::Traewelling(id) if id == 0 => rocket::response::Redirect::temporary(format!("https://traewelling.de/@{}", config.traewelling_username)),
+        Status::Traewelling(id) => rocket::response::Redirect::temporary(format!("https://traewelling.de/status/{}", id)),
         Status::Flight(id) => rocket::response::Redirect::temporary(format!("https://live.flighty.app/{}", id)),
     })
 }
@@ -189,6 +237,11 @@ fn flighty_status(id: &str) -> rocket::response::Redirect {
     rocket::response::Redirect::temporary(format!("https://live.flighty.app/{}", id))
 }
 
+#[get("/t/<id>")]
+fn traewelling_status(id: &str) -> rocket::response::Redirect {
+    rocket::response::Redirect::temporary(format!("https://traewelling.de/status/{}", id))
+}
+
 #[launch]
 fn rocket() -> _ {
     pretty_env_logger::init();
@@ -199,5 +252,6 @@ fn rocket() -> _ {
             index,
             flighty_status,
             travelynx_status,
+            traewelling_status,
         ])
 }
