@@ -1,0 +1,72 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: woistdasq
+  namespace: q-personal
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: woistdasq
+  template:
+    metadata:
+      annotations:
+        cni.projectcalico.org/ipv6pools: "[\"default-ipv6-ippool\"]"
+      labels:
+        app: woistdasq
+    spec:
+      containers:
+        - name: woistdasq
+          image: theenbyperor/woistdasq:3
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8000
+          env:
+            - name: ROCKET_ICAL_URL
+              value: "https://p65-caldav.icloud.com/published/2/MTE5ODI2NzE4NjcxMTk4MtLolaPZM4dfZ51A3OlBfYVUUXcQZjz78jFeosDa99weVVZ1VlGwX0uWdcKky5qOUGQwMqiSYbPKjh6M_6K-SlY"
+            - name: ROCKET_TRAVELYNX_TOKEN
+              value: "2889-3e8a5f34-d1b0-4622-94e8-86efe054d498"
+            - name: RUST_LOG
+              value: "info"
+            - name: ROCKET_ENV
+              value: "production"
+            - name: ROCKET_PORT
+              value: "8000"
+            - name: ROCKET_ADDRESS
+              value: "::"
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: woistdasq
+  namespace: q-personal
+spec:
+  podSelector:
+    matchLabels:
+      app: woistdasq
+  policyTypes:
+  - Ingress
+  ingress:
+  - from:
+    - namespaceSelector:
+        matchLabels:
+          app.kubernetes.io/name: ingress-nginx
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: ingress-nginx
+    ports:
+    - protocol: TCP
+      port: 8000
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: woistdasq
+  namespace: q-personal
+spec:
+  selector:
+    app: woistdasq
+  ports:
+    - port: 8000
+      targetPort: 8000
+      name: nginx
